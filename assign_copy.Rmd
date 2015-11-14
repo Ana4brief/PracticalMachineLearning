@@ -1,0 +1,183 @@
+---
+title: "Predict exercise level using body measurements"
+output: html_document
+---
+
+The purpose of this project is to predict the manner in which an exercise was executed (variable 'classe') using a set of body measurements related to position, velocity and acceleration. The variable 'classe' is labelled in the training set (comprising 19622 samples from 6 subjects), and the goal is to use the model to predict the value of 'classe' for unlabelled cases (in the testing set).
+
+##Methods
+
+####Validation procedure
+
+Assessing the model only on cases in the training set may lead to overfitting and poor generalisability to new cases. I aim to optimise the model for lowest expected out-of-sample error. For reasons of speed-vs-generalisability (out-of-sample accuracy) trade-off I choose to use k-folds cross-validation with K=5. The number of folds itself, and perhaps the use of folds vs random sampling, may be cross-validated.
+
+####Method
+
+In a realistic setting I would like to come to a quasi-mechanistic understanding of how different variables affect quality of exercise. Since this is not possible within the limits of this project (it would involve an increased number of predictors, increased computer time and time to develop ad-hoc methods), I choose to compromise on interpretability for the sake of accuracy, by using a random forest algorithm, as implemented in the 'caret' package. (A post-hoc observation is that the histograms of predictors that turn out to be the most significant in the random forest model cannot be described well by normal distributions, so a general linear model or other model-based approaches probably wouldn't have been very appropriate anyway.)
+
+####Predictors
+
+One simple choice was to remove all measurements (potential predictors) that include non-numeric and/or missing values. For the purpose of this moment-to-moment analysis I also disregarded contextual variables, for instance the time and date of each measurement.
+
+One interesting choice is how to handle the different subjects. A basic linear regression analysis showed, as expected, that there are significant differences between participants (meaning that the variable user_name has predictive power). In the interest of simplicity I choose to consider the identity of subjects as another (categorical) predictor.
+
+####Simplicity
+
+In an attempt to take advantage of the structure in the data to reduce the number of predictors, I fitted an additional random forest model using principal components as predictors.
+
+##Results
+
+```{r cache=TRUE,echo=FALSE,results="hide"}
+library(caret)
+train = read.csv("~aep20/courses/onlinecourses/Coursera/DataScience/secondrun/PracticalMachineLearn/pml-training.csv")
+test = read.csv("~aep20/courses/onlinecourses/Coursera/DataScience/secondrun/PracticalMachineLearn/pml-testing.csv")
+train_nona<-train
+test_nona<-test
+for(i in seq(dim(train)[2],1,-1)){
+ if(sum(is.na(train[,i]))>0){
+  train_nona<-train_nona[,-i]
+  test_nona<-test_nona[,-i]
+ }
+}
+train_vars<-train_nona[,-c(1,3,4,5,6,7)]
+test_vars<-test_nona[,-c(1,3,4,5,6,7)]
+predictors<-train_vars[,-c(1,87)]
+test_predictors<-test_vars[,-c(1,87)]
+predictors_nomiss<-predictors
+for(i in seq(dim(predictors)[2],1,-1)){
+ if(sum(predictors[,i]=="")>0){
+  predictors_nomiss<-predictors_nomiss[,-i]
+  test_predictors<-test_predictors[,-i]
+ }
+}
+vars<-data.frame(name=train$user_name,predictors_nomiss,classe=train$classe)
+test_vars<-data.frame(name=test$user_name,test_predictors,classe=rep("NA",20))
+```
+
+Model fitting (on data that retains only the chosen predictors, as above)
+
+```{r,cache=TRUE}
+set.seed(1245)
+m_rf_folds<-train(classe~.,data=vars, trControl=trainControl(method = "cv", number = 5))
+p_rf<-predict(m_rf_folds$finalModel)
+ok_rf<-mean(p_rf==vars$classe)
+#
+pcs<-preProcess(vars[,-54],method="pca",thresh=0.9)
+pcvars<-predict(pcs,vars)
+m_rf_pcs<-train(classe~.,data=pcvars,method='rf')
+p_rf_pcs<-predict(m_rf_pcs$finalModel)
+ok_rf_pcs<-mean(p_rf_pcs==vars$classe)
+```
+
+The final random forest model with 53 predictors (user_name and 52 body measurements with complete cases) yielded the following results:
+
+```{r echo=FALSE,results="hide"}
+library(caret)
+```
+
+#### Best model evaluation:
+
+```{r}
+m_rf_folds
+#plot(m_rf_folds)
+```
+
+The cross-validated accuracy (estimated out-of-sample error) is 0.994751. Hence I conclude that I expect a little over 0.5% errors in the testing set. For 20 testing samples, typically all results should be correct. 
+
+Training set accuracy (calculated as proportion of correct predictions):
+
+```{r}
+ok_rf
+```
+
+Confusion matrix:
+
+```{r}
+confusionMatrix(p_rf,train$classe)
+```
+
+Variables in order of importance:
+```{r}
+rf_varimp<-varImp(m_rf_folds,scale=TRUE)
+plot(rf_varimp,20)
+```
+
+####PCA
+
+The PCA model fares slightly less well:
+```{r}
+m_rf_pcs
+```
+
+with training set accuracy:
+```{r}
+ok_rf_pcs
+```
+
+Histogram of the most important predictor in the random forest model and of the first principal component:
+```{r}
+normpre<-preProcess(vars,method=c("center","scale"))
+normvars<-predict(normpre,vars)
+impvars<-normvars[,c("roll_belt","pitch_forearm","yaw_belt","pitch_belt","magnet_dumbbell_y","magnet_dumbbell_z","roll_forearm")]
+par(mfrow=c(1,2))
+hist(impvars[,1],xlab="Normalised roll_belt",main="")
+hist(pcvars$PC1,xlab="First principal component",main="")
+```
+
+The first principal component, while not normally distributed, has a more even spread than the original predictor (which has a bimodal distribution). This suggests that principal components may improve a model-based algorithm, for instance a general linear model.
+
+```{r echo=FALSE}
+#par(mfrow=c(2,2))
+#for(i in 1:2){
+#  plot(pcvars$PC1,impvars[,i])
+#  plot(pcvars$PC2,impvars[,i])
+#}
+#par(mfrow=c(2,2))
+#for(i in 3:4){
+#  plot(pcvars$PC1,impvars[,i])
+#  plot(pcvars$PC2,impvars[,i])
+#}
+#par(mfrow=c(2,2))
+#for(i in 5:6){
+#  plot(pcvars$PC1,impvars[,i])
+#  plot(pcvars$PC2,impvars[,i])
+#}
+#par(mfrow=c(2,2))
+#for(i in 7:7){
+#  plot(pcvars$PC1,impvars[,i])
+#  plot(pcvars$PC2,impvars[,i])
+#}
+```
+
+####Generalisability to population
+
+Check the influence of the subject's identity:
+```{r}
+head(rf_varimp$importance,5)
+par(mfrow=c(1,2))
+  plot(pcvars$PC1,vars$name)
+  plot(pcvars$PC2,vars$name)
+```
+
+The user's identity doesn't seem to have a very important contribution to predicting the quality of exercise, in the random forest model. This is encouraging in the perspective of extending predictions across the whole population of subjects.
+
+In a more rigorous setting I might want to fit separate models for each subject and look at their predictive power for other subjects. Measurements for many subjects would be necessary, because the first two principal components do suggest that different types of subjects may exist.
+
+####Testing the model
+
+Test set predictions (for the random forest model with all variables) are as follows:
+
+```{r}
+p_test<-predict(m_rf_folds,test_vars)
+p_test
+ pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(p_test)
+```
+
+All results checked as correct, which suggests that the people who wrote caret are very clever indeed.
